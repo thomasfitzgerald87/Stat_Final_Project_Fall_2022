@@ -134,9 +134,21 @@ This may be a bit of a leap, but Adjuvant Therapy is additional therapy given in
 df$Adjuvent_Chemo[df$Adjuvent_Chemo!=0]<-1
 ```
 
-Ope(n)_time and Last_followup come in two incompatible formats, so we're going to fix that part.  Most of it is in Excel's 1900 date format, and the rest appears to be in yyyymmdd format.  This block converts it to R's date format, but has some issues.  I recommend option 2: Just drop them.
+The EGFR- and adjacent columns also have a lot of NAs, we're going to replace them with an 'UNK' code.
 ```{r}
-#Option 1: Attempt to fix formatting.
+df$hTERT[is.na(df$hTERT)] <- 'UNK'
+df$EGFR_E18[is.na(df$EGFR_E18)] <- 'UNK'
+df$EGFR_E19[is.na(df$EGFR_E19)] <- 'UNK'
+df$EGFR_E20[is.na(df$EGFR_E20)] <- 'UNK'
+df$EGFR_E21[is.na(df$EGFR_E21)] <- 'UNK'
+df$KRAS_E2[is.na(df$KRAS_E2)] <- 'UNK'
+df$HER2[is.na(df$HER2)] <- 'UNK'
+df$BRAF[is.na(df$BRAF)] <- 'UNK'
+df$ALK[is.na(df$ALK)] <- 'UNK'
+```
+Ope(n)_time and Last_followup come in two incompatible formats, so we're going to fix that part.  Most of it is in Excel's 1900 date format, and the rest appears to be in yyyymmdd format.  This block converts it to R's date format, but has some issues.  I recommend option 2: Just drop them.
+Option 1: Attempt to fix formatting.
+```{r}
 # library(lubridate)
 # 
 # date_fix <- function(x){
@@ -154,9 +166,9 @@ Ope(n)_time and Last_followup come in two incompatible formats, so we're going t
 # df$Last_followup[which(df$Last_followup == '#NULL!')] <-
 #   df$Ope_time[[which(df$Last_followup == '#NULL!')]] %m+% months(round(mean(df$OS,na.rm=TRUE)))
 # df$Last_followup <- lapply(df$Last_followup,date_fix)
-
-
-#Option 2: Just get rid of them.
+```
+Option 2: Just get rid of them.
+```{r}
 df<-select(df,-Ope_time,-Last_followup)
 ```
 
