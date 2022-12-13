@@ -1,0 +1,718 @@
+---
+title: "Stats_Project_2022_Fall_Group_B"
+author: "Marina, Paul, Thomas"
+date: "2022-12-06"
+output: html_document
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(plotly)
+library(readxl)
+library(nimble)
+```
+
+
+Import from google sheets (Does not currently work)
+```{r}
+# url <- 'https://docs.google.com/spreadsheets/d/12s9EuWLAn4ci66V1wJ6fw4_1I4ESfaEx/edit?usp=share_link&ouid=105499402514720076437&rtpof=true&sd=true'
+# temp <- tempfile(fileext=".zip")
+# download.file(url,temp)
+# unzip(temp,tempdir()) #Fails to unzip
+# out
+# df<-read_excel(out)
+
+```
+
+Cheesy work-around.
+```{r}
+df<-read_excel('./Table_S2.xls')
+head(df)
+```
+First, we're going to fix the column names.
+
+*Replaced % with 'percent' in column 'tumor rate %'
+```{r}
+if(colnames(df[,2])=='...2'){
+  colnames(df)<-gsub(" ","_",subset(df,df[,1]=='ID'))
+}
+
+df<-rename(df,c('tumor_rate_percent'='tumor_rate_%',
+                'T_of_tumor'='T',
+                'num_nodes_with_tumor'='N'))
+
+head(df)
+```
+"A total of 194 records containing clinicopathological features related to the prognosis of NSCLC (Non-small cell lung cancer) patients were detailed in this dataset."
+
+Now, we can drop the column names & NA rows from the data, and we should end up with 194 valid entries.
+```{r}
+df <- subset(df,is.na(ID)==FALSE&ID!='ID')
+head(df)
+```
+
+(i) The patient records lack of smoking information (n = 24) was excluded during the model development. 
+
+I'm assuming this refers to the 'Smoking' column.  The check below shows 20 NA rows in the dataset, with all other entries containing apparently valid results (0,1).  I'm going to assume for the time being "n = 24" was a typo, or from an older version of the dataset.
+```{r}
+print(paste('Total Smoking NAs: ',sum(is.na(df$Smoking)),sep=''))
+table(df$Smoking)
+df<-subset(df,is.na(Smoking)==FALSE)
+```
+
+(ii) The patient status feature has also been omitted from our dataset as the vast proportion of the record lacks that component. 
+```{r}
+print(paste('Total status NAs: ',sum(is.na(df$status)),sep=''))
+print(paste('Proportion status NAs: ',round(sum(is.na(df$status))/nrow(df),3),sep=''))
+table(df$status)
+df <- select(df,-status)
+```
+The NA count = 24 on this entry makes me concerned that there was a mix-up between the smoking and status categories, especially because status has a fairly low NA proportion (~.138).  Omitting status for now, may need to revise later.
+
+(iii) The missing values in other components of the datasets have been replaced by inclusion of the mean values of the respective columns. 
+
+The entire dataset was imported as the 'chr' type, so we're going to need to fix the typing before we can replace anything with the column mean.  
+```{r}
+str(df)
+```
+All variables were imported as chr type, we're now going to attempt to fix that before replacing NULLs with column mean.
+
+```{r}
+#T_col,N,and Staging left as character, commented lines can be pasted in to switch.
+
+df <- df %>% mutate('ID' = as.numeric(ID),
+              'tumor_rate_percent' = as.numeric(tumor_rate_percent),
+              'Age' = as.numeric(Age),
+              'T_of_tumor' = as.numeric(T_of_tumor),
+              'num_nodes_with_tumor' = as.numeric(num_nodes_with_tumor),
+              'Staging' = as.numeric(Staging),
+              'Tumor_Size' = as.numeric(Tumor_Size),
+              'Lymphnode_resected' = as.numeric(Lymphnode_resected),
+              'Station_of_lymphnode_resected' = as.numeric(Station_of_lymphnode_resected),
+              'Metastasis_Lymphnode' = as.numeric(Metastasis_Lymphnode),
+              'Station_of_Lymphnode_metastasis' = as.numeric(Station_of_Lymphnode_metastasis),
+              'DFS' = as.numeric(DFS),
+              'OS' = as.numeric(OS)) %>%
+  select(-'NA')
+
+str(df)
+```
+Now, let's see where we have NA's, to figure out where they might have applied this method.
+
+```{r}
+for(j in 1:ncol(df)){
+  if(sum(is.na(df[,j]))>0){
+    print(paste(colnames(df[j]),sum(is.na(df[,j])),sep=': '))
+  }
+}
+```
+The "EGFR_E..." series is categorical, as are "HER2","BRAF", and "ALK".  
+"Adjuvent_Radiotherapy" contains only 0's and 1's, indicating two categories or a boolean.   
+
+This leaves num_nodes_with_tumor,Staging,Station_of_lymphode_resected, and OS as the only valid options for a mean replacement. 
+```{r}
+df$num_nodes_with_tumor[is.na(df$num_nodes_with_tumor)] <- round(mean(df$num_nodes_with_tumor,na.rm=TRUE))
+df$Staging[is.na(df$Staging)] <- round(mean(df$Staging,na.rm=TRUE))
+df$Station_of_lymphnode_resected[is.na(df$`Station_of_lymphnode_resected`)] <- round(mean(df$`Station_of_lymphnode_resected`,na.rm=TRUE))
+df$OS[which(df$Last_followup == '#NULL!')] <- round(mean(df$OS,na.rm=TRUE))
+```
+(iv) The characters used to define a particular category of function have been assigned in terms of numerical values (eg. Male = 1; Female = 0).
+
+I'm unclear which columns this was applied to (besides Sex, based on the example).  I am going to adjust sex to match their values, but I will be leaving the other categorical variables, on the assumption that, in the study, they were redefined as numerical for easier input into their ML model.
+```{r}
+if(max(df$Sex)=="2") {df$Sex[df$Sex=="2"]<-"0"}
+table(df$Sex)
+```
+
+Now, we can fix some of the other major issues in the dataset.
+```{r}
+table(df$Adjuvent_Chemo)
+```
+This may be a bit of a leap, but Adjuvant Therapy is additional therapy given in addition to a primary therapy.  I'm guessing that 0=No, 1=Yes, and the other codes are specific types of Adjuvant therapy.  On that assumption, I'm going to refactor the other categories as 1.
+
+```{r}
+df$Adjuvent_Chemo[df$Adjuvent_Chemo!=0]<-1
+```
+
+The EGFR- and adjacent columns also have a lot of NAs, we're going to replace them with an 'UNK' code.
+```{r}
+df$hTERT[is.na(df$hTERT)] <- 'UNK'
+df$EGFR_E18[is.na(df$EGFR_E18)] <- 'UNK'
+df$EGFR_E19[is.na(df$EGFR_E19)] <- 'UNK'
+df$EGFR_E20[is.na(df$EGFR_E20)] <- 'UNK'
+df$EGFR_E21[is.na(df$EGFR_E21)] <- 'UNK'
+df$KRAS_E2[is.na(df$KRAS_E2)] <- 'UNK'
+df$HER2[is.na(df$HER2)] <- 'UNK'
+df$BRAF[is.na(df$BRAF)] <- 'UNK'
+df$ALK[is.na(df$ALK)] <- 'UNK'
+```
+Ope(n)_time and Last_followup come in two incompatible formats, so we're going to fix that part.  Most of it is in Excel's 1900 date format, and the rest appears to be in yyyymmdd format.  This block converts it to R's date format, but has some issues.  I recommend option 2: Just drop them.
+Option 1: Attempt to fix formatting.
+```{r}
+# library(lubridate)
+# 
+# date_fix <- function(x){
+#   if(nchar(x)==6){x<-paste(x,'01',sep='')}
+#   if(nchar(x)==8){
+#     x <- as.Date(paste(substr(x,1,4),substr(x,5,6),substr(x,7,8),sep='-'))
+#   } else {
+#     x <- dmy("01-Jan-1900") + days(as.numeric(x)-2) #
+#   }
+#   return(x)
+# }
+# 
+# df$Ope_time <- lapply(df$Ope_time,date_fix)
+# 
+# df$Last_followup[which(df$Last_followup == '#NULL!')] <-
+#   df$Ope_time[[which(df$Last_followup == '#NULL!')]] %m+% months(round(mean(df$OS,na.rm=TRUE)))
+# df$Last_followup <- lapply(df$Last_followup,date_fix)
+```
+Option 2: Just get rid of them.
+```{r}
+df<-select(df,-Ope_time,-Last_followup)
+```
+
+```{r}
+df<-as.data.frame(df)
+summary(df)
+```
+
+Variable Notes:
+ID                        Patient ID number
+tumor_rate_percent        
+Sex                       0 Female, 1 Male
+Age                       Age in years
+Smoking                   0 Nonsmoker, 1 Smoker
+path                      
+Ope_time                  Earlier date, either onset, diagnosis, or beginning of treatment.
+T_of_tumor                Scale & Magnitude of tumor
+num_nodes_with_tumor      Number of cancer nodes with tumors
+Staging                   
+hTERT,EGFR...ALK          WT, wild-type; DEL, deletion; INS, insertion; NEG, negative; POS, positive.
+Tumor_size                
+Lymphnode_resected        
+Stat_of_lumph_resectd      
+Metastasis_Lymphnode      
+Stat_of_Lumph_meta..      
+Adjuvent_Chemo            Originally 0,1,various small categories.  Combined categories into 1.  Additional chemo treatment.
+Adjuvent_Radiotherapy     0,1.  Additional radiotherapy.
+DFS
+Last_Followup             Later date, related to Ope_time
+OS                        # of Months between Ope_time and Last_Followup.
+status                    0,1
+Relaps                    0,1
+
+Main comments from cleaning:
+
+I dropped Ope_time and Last_Followup: OS is a more compact version of the same main information (treatment time).
+
+I tried to follow the steps from Part 2.1 in the paper, but there are some errors in their description.
+  1. There are 20 NAs in the Smoking column, not 24.
+  2. The status column only has 24 NAs, not "A vast proportion of the record".  I still dropped it to match their pre-processing.
+  3. I left categorical/boolean variables (Sex,Smoking,etc.) as character.  Study may have refactored them as numeric, but for our purposes I think we can skip that step.
+  
+*Still to-do on cleaning:
+  Fix import block
+  Fix dates (if relevent)
+  Editing
+
+
+
+
+
+## Beginning of Logistic Regression section
+
+
+
+
+
+
+### Data Preprocessing
+
+
+```{r}
+#Remove rows with NA
+df = df[rowSums(is.na(df))==0,]
+```
+
+
+Convert to factor the categorical columns
+```{r}
+df$ID <- as.factor(df$ID)
+df$Sex <- as.factor(df$Sex)
+df$Smoking <- as.factor(df$Smoking)
+df$path <- as.factor(df$path)
+df$Staging <- as.factor(df$Staging)
+df$EGFR_E18 <- as.factor(df$EGFR_E18)
+df$BRAF <- as.factor(df$BRAF)
+df$Adjuvent_Radiotherapy <- as.factor(df$Adjuvent_Radiotherapy)
+df$hTERT <- as.factor(df$hTERT)
+df$EGFR_E20 <- as.factor(df$EGFR_E20)
+df$ALK <- as.factor(df$ALK)
+df$EGFR_E19 <- as.factor(df$EGFR_E19)
+df$T_of_tumor <- as.factor(df$T_of_tumor)
+df$KRAS_E2 <- as.factor(df$KRAS_E2)
+df$EGFR_E21 <- as.factor(df$EGFR_E21)
+df$HER2 <- as.factor(df$HER2)
+df$Adjuvent_Chemo <- as.factor(df$Adjuvent_Chemo)
+df$Relaps <- as.factor(df$Relaps) #Our response variable
+```
+
+```{r}
+#count unique values for each variable
+sapply(lapply(df, unique), length)
+```
+Column hTERT has one unique value across the rows so we are removing this column to avoid issues when fitting the regression.
+Drop also column ID
+
+```{r}
+df <- subset(df, select = -c(hTERT, ID))
+```
+
+
+## Train-Test Split
+```{r}
+#Split data into train and test
+set.seed(1)
+
+#use 70% of dataset as training set and 30% as test set
+sample <- sample(c(TRUE, FALSE), nrow(df), replace=TRUE, prob=c(0.7,0.3))
+train  <- df[sample, ]
+test   <- df[!sample, ]
+```
+
+# Logistic regression 
+Fit an initial logistic regression with all of the predictors 
+```{r}
+glm.multiple <- glm(Relaps ~ .,
+                    data=train,
+                    family="binomial")
+
+summary(glm.multiple)
+```
+We are gettin the Warning "glm.fit: fitted probabilities numerically 0 or 1 occurred". This might be happening due to extreme outliers or influential observations.
+
+This brute force model does not look great so let's deal with outliers and start applying some model selection
+
+## Deal with outliers
+```{r}
+## Influence via Cook's distance:
+cooks.distance(glm.multiple)
+plot(glm.multiple, which=4)
+```
+
+
+```{r}
+#Removing outliers 
+train <- train[-c(2, 8, 55), ]
+
+#Fit Logistic regression again
+glm.multiple <- glm(Relaps ~ .,
+                    data=train,
+                    family="binomial")
+
+summary(glm.multiple)
+```
+There are some predictors that look to be significant: Sex, Age, T_of_tumor, Station_of_lymphnode_resected, Metastasis_Lymphnode, Adjuvent_Radiotherapy1 and DFS
+
+
+# ---> VIF to remove colinearity
+NOTE: we get the error "there are aliased coefficients in the model" which may be related to multicollinearity.
+
+```{r}
+
+```
+
+# Variable selection via AIC
+```{r}
+step(glm.multiple)
+```
+Final model
+
+```{r}
+glm.multiple_final <- glm(Relaps ~  Tumor_Size + 
+                                    OS + 
+                                    Lymphnode_resected +
+                                    Sex + 
+                                    Age + 
+                                    Station_of_lymphnode_resected +
+                                    num_nodes_with_tumor +
+                                    Adjuvent_Radiotherapy +
+                                    DFS,
+                        data=train,
+                        family="binomial")
+
+summary(glm.multiple_final)
+```
+
+
+
+
+# Test model significance using likelihood ratio test
+```{r}
+#significance of full model/subset of predictors
+
+glm.null <- glm(Relaps ~ 1,
+                data=train,
+                family="binomial")
+
+# Test for significance of the full model:
+anova(glm.null, glm.multiple_final, test = "LRT")
+```
+The p-val of Full model (Model 2) is almost 0. This means that there is there is an improvement on Full model over Null. Our model is significant.
+
+## Make predictions on the training set
+```{r}
+predicted.Relaps_prob_train = predict(glm.multiple_final, newdata=train, type="response")
+```
+
+Let's set the threshold at 0.6. Obtained probabilities over 0.6 will imply Relapse
+```{r}
+predicted.Relaps_train <- list()
+
+for (p in predicted.Relaps_prob_train) {
+  if (p > 0.6){
+    predicted.Relaps_train <- append(predicted.Relaps_train, 1)
+  }else{
+    predicted.Relaps_train <- append(predicted.Relaps_train, 0)
+  }
+}
+```
+
+Calculate Model's accuracy
+```{r}
+acc <- (train$Relaps == predicted.Relaps_train)
+accuracy <- sum(acc)/length(acc)
+accuracy
+```
+
+## Make predictions on the test set
+```{r}
+predicted.Relaps_prob_test = predict(glm.multiple_final, newdata=test, type="response")
+```
+Let's set the threshold at 0.6. Obtained probabilities over 0.6 will imply Relapse
+```{r}
+predicted.Relaps_test <- list()
+
+for (p in predicted.Relaps_prob_test) {
+  if (p > 0.6){
+    predicted.Relaps_test <- append(predicted.Relaps_test, 1)
+  }else{
+    predicted.Relaps_test <- append(predicted.Relaps_test, 0)
+  }
+}
+```
+
+Calculate Model's accuracy
+```{r}
+acc <- (test$Relaps == predicted.Relaps)
+accuracy <- sum(acc)/length(acc)
+accuracy
+```
+Our model might be a little bit overfitted since it is achieving an accuracy of 90% in our training set and drops to 80% in the test set. However, it seems to generalize pretty well.
+
+
+
+
+# Start of Bayesian approach
+
+```{r}
+#must be numeric in nimble code
+train$Relaps <- as.integer(train$Relaps ) -1
+train$Sex <- as.integer(train$Sex)-1
+train$Adjuvent_Radiotherapy <- as.integer(train$Adjuvent_Radiotherapy)-1
+```
+
+```{r}
+test$Relaps <- as.integer(test$Relaps ) -1
+test$Sex <- as.integer(test$Sex)-1
+test$Adjuvent_Radiotherapy <- as.integer(test$Adjuvent_Radiotherapy)-1
+```
+
+## Plotting
+
+```{r}
+# logistic regression model
+y <- train$Relaps
+x1 <- train$Tumor_Size
+x2 <- train$OS
+x3 <- train$Lymphnode_resected
+x4 <- train$Sex
+x5 <- train$Age
+x6 <- train$Station_of_lymphnode_resected
+x7 <- train$num_nodes_with_tumor
+x8 <- train$Adjuvent_Radiotherapy
+x9 <- train$DFS
+n <- nrow(train)
+
+
+# code for the Bayesian model
+code <- nimbleCode({
+  
+  alpha ~ dnorm(0, sd = 1000)
+  beta1 ~ dnorm(0, sd = 1000)
+  beta2 ~ dnorm(0, sd = 1000)
+  beta3 ~ dnorm(0, sd = 1000)
+  beta4 ~ dnorm(0, sd = 1000)
+  beta5 ~ dnorm(0, sd = 1000)
+  beta6 ~ dnorm(0, sd = 1000)
+  beta7 ~ dnorm(0, sd = 1000)
+  beta8 ~ dnorm(0, sd = 1000)
+  beta9 ~ dnorm(0, sd = 1000)
+  
+  for (i in 1:n){
+    
+    eta[i] <- alpha + beta1 * x1[i] + beta2 * x2[i]+ beta3 * x3[i]+ beta4 * x4[i]+ beta5 * x5[i]+ beta6 * x6[i]+ beta7 * x7[i]+ beta8 * x8[i]+ beta9 * x9[i]
+    pi[i] <- exp(eta[i]) / (1 + exp(eta[i]))
+    y[i] ~ dbern(pi[i])
+    
+  }
+
+  
+})
+
+constants <- list(n = n, x1 = x1,x2 = x2,x3=x3,x4=x4,x5=x5,x6=x6,x7=x7,x8=x8,x9=x9)
+data <- list(y = y)
+initial <- list(alpha = mean(y), beta1 = 0, beta2 = 0, beta3 = 0, beta4 = 0, beta5=0, beta6=0, beta7=0, beta8=0, beta9=0)
+Rmodel <- nimbleModel(code, constants, data, initial)
+```
+
+
+```{r}
+conf <- configureMCMC(Rmodel)
+```
+
+
+```{r}
+Rmcmc <- buildMCMC(conf)
+Cmodel <- compileNimble(Rmodel)
+```
+
+
+```{r}
+Cmcmc <- compileNimble(Rmcmc, project = Rmodel)
+```
+
+
+```{r}
+set.seed(0)
+results <- runMCMC(Cmcmc, niter = 11000, nburnin = 1000, samples=TRUE, summary=TRUE)
+#head(results$samples)
+
+```
+
+
+```{r}
+## Plot Markov Chains:
+plotdata <- as_tibble(results$samples) %>% 
+  pivot_longer(cols=c("alpha","beta1","beta2","beta3","beta4","beta5","beta6","beta7","beta8","beta9"), names_to="Parameter", values_to="Values") %>%
+  add_column(Sequence = rep(1:nrow(results$samples),ncol(results$samples)))
+ggplot(data=plotdata, aes(x=Sequence, y=Values)) +
+  geom_line(col="lightblue") +
+  geom_point(col="blue", pch=16, size=0.2, alpha=0.5) +
+  facet_wrap(vars(Parameter), nrow=3, scale="free_y") +
+  labs(x = "MCMC Simulation Number",
+       y = "Samples of Parameters",
+       title = "Markov Chain Monte Carlo Samples")
+```
+
+
+```{r}
+## Plot Density Estimates:
+ggplot(data=plotdata, aes(x=Values, fill=Parameter)) +
+  geom_density(color="black") +
+  facet_wrap(vars(Parameter), nrow=2, scale="free") +
+  labs(title="Approximations of Posterior Distributions") +
+  theme(legend.position="none")
+```
+
+Comparing the coefficients between regular logistic regression and Bayesian
+```{r}
+results$summary
+```
+
+```{r}
+summary(glm.multiple_final)$coef
+```
+
+
+## Making predictions
+
+
+```{r}
+# logistic regression model
+y <- train$Relaps
+x1 <- train$Tumor_Size
+x2 <- train$OS
+x3 <- train$Lymphnode_resected
+x4 <- train$Sex
+x5 <- train$Age
+x6 <- train$Station_of_lymphnode_resected
+x7 <- train$num_nodes_with_tumor
+x8 <- train$Adjuvent_Radiotherapy
+x9 <- train$DFS
+n <- nrow(train)
+
+
+y_test <- test$Relaps
+x1_test <- test$Tumor_Size
+x2_test <- test$OS
+x3_test <- test$Lymphnode_resected
+x4_test <- test$Sex
+x5_test <- test$Age
+x6_test <- test$Station_of_lymphnode_resected
+x7_test <- test$num_nodes_with_tumor
+x8_test <- test$Adjuvent_Radiotherapy
+x9_test <- test$DFS
+n_test <- nrow(test)
+
+# code for the Bayesian model
+code <- nimbleCode({
+  
+  alpha ~ dnorm(0, sd = 1000)
+  beta1 ~ dnorm(0, sd = 1000)
+  beta2 ~ dnorm(0, sd = 1000)
+  beta3 ~ dnorm(0, sd = 1000)
+  beta4 ~ dnorm(0, sd = 1000)
+  beta5 ~ dnorm(0, sd = 1000)
+  beta6 ~ dnorm(0, sd = 1000)
+  beta7 ~ dnorm(0, sd = 1000)
+  beta8 ~ dnorm(0, sd = 1000)
+  beta9 ~ dnorm(0, sd = 1000)
+  
+  for (i in 1:n){
+    
+    eta[i] <- alpha + beta1 * x1[i] + beta2 * x2[i]+ beta3 * x3[i]+ beta4 * x4[i]+ beta5 * x5[i]+ beta6 * x6[i]+ beta7 * x7[i]+ beta8 * x8[i]+ beta9 * x9[i]
+    pi[i] <- exp(eta[i]) / (1 + exp(eta[i]))
+    y[i] ~ dbern(pi[i])
+    
+  }
+
+    for (i in 1:n_test){
+    
+    eta_test[i] <- alpha + beta1 * x1_test[i] + beta2 * x2_test[i]+ beta3 * x3_test[i]+ beta4 * x4_test[i]+ beta5 * x5_test[i]+ beta6 * x6_test[i]+ beta7 * x7_test[i]+ beta8 * x8_test[i]+ beta9 * x9_test[i]
+    pi_test[i] <- exp(eta_test[i]) / (1 + exp(eta_test[i]))
+    y_test[i] ~ dbern(pi_test[i])
+    
+  }
+  
+  
+  for (i in 1:n){
+    
+    eta_train[i] <- alpha + beta1 * x1[i] + beta2 * x2[i]+ beta3 * x3[i]+ beta4 * x4[i]+ beta5 * x5[i]+ beta6 * x6[i]+ beta7 * x7[i]+ beta8 * x8[i]+ beta9 * x9[i]
+    pi_train[i] <- exp(eta_train[i]) / (1 + exp(eta_train[i]))
+    y_train[i] ~ dbern(pi_train[i])
+    
+  }
+  
+  
+})
+
+constants <- list(n = n, x1 = x1,x2 = x2,x3=x3,x4=x4,x5=x5,x6=x6,x7=x7,x8=x8,x9=x9,n_test = n_test, x1_test = x1_test,x2_test = x2_test,x3_test=x3_test,x4_test=x4_test,x5_test=x5_test,x6_test=x6_test,x7_test=x7_test,x8_test=x8_test,x9_test=x9_test)
+data <- list(y = y)
+initial <- list(alpha = mean(y), beta1 = 0, beta2 = 0, beta3 = 0, beta4 = 0, beta5=0, beta6=0, beta7=0, beta8=0, beta9=0)
+Rmodel <- nimbleModel(code, constants, data, initial)
+```
+
+
+```{r}
+conf <- configureMCMC(Rmodel)
+
+## Add a monitor for the sampled alpha[j]'s:
+conf$addMonitors("y_test")
+conf$addMonitors("y_train")
+conf$getMonitors()
+```
+
+```{r}
+Rmcmc <- buildMCMC(conf)
+Cmodel <- compileNimble(Rmodel)
+```
+
+
+```{r}
+Cmcmc <- compileNimble(Rmcmc, project = Rmodel)
+```
+
+
+```{r}
+set.seed(0)
+results <- runMCMC(Cmcmc, niter = 11000, nburnin = 1000, samples=TRUE, summary=TRUE)
+#head(results$samples)
+
+```
+
+
+
+head(results$summary)
+
+## Making predictions with Bayesian approach
+
+```{r}
+#predicted probabilities
+test_prob <- colMeans(results$samples)[11:60]
+train_prob <- colMeans(results$samples)[61:180]
+```
+
+
+
+Using previous approach for making predictions (threshold = 0.6)
+
+```{r}
+train_pred <- list()
+
+for (p in train_prob) {
+  if (p > 0.6){
+    train_pred <- append(train_pred, 1)
+  }else{
+    train_pred <- append(train_pred, 0)
+  }
+}
+```
+
+Calculate Model's accuracy on Train set
+```{r}
+acc <- (train$Relaps == train_pred)
+accuracy <- sum(acc)/length(acc)
+accuracy
+```
+
+
+
+```{r}
+test_pred <- list()
+
+for (p in test_prob) {
+  if (p > 0.6){
+    test_pred <- append(test_pred, 1)
+  }else{
+    test_pred <- append(test_pred, 0)
+  }
+}
+```
+
+Calculate Model's accuracy on Test set
+```{r}
+acc <- (test$Relaps == test_pred)
+accuracy <- sum(acc)/length(acc)
+accuracy
+```
+
+```{r}
+identical(train_pred,predicted.Relaps_train)
+identical(test_pred,predicted.Relaps_test)
+```
+
+
+
+The Bayesian approach has identical performance and predictions as regular logistic regression.
+
+
+
+
+
+
