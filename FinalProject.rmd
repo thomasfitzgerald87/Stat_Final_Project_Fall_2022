@@ -396,7 +396,7 @@ for (p in predicted.Relaps_prob_test) {
 
 Calculate Model's accuracy
 ```{r}
-acc <- (test$Relaps == predicted.Relaps)
+acc <- (test$Relaps == predicted.Relaps_test)
 accuracy <- sum(acc)/length(acc)
 accuracy
 ```
@@ -408,130 +408,20 @@ Our model might be a little bit overfitted since it is achieving an accuracy of 
 # Start of Bayesian approach
 
 ```{r}
-#must be numeric in nimble code
+#Data must be numeric in nimble code
 train$Relaps <- as.integer(train$Relaps ) -1
 train$Sex <- as.integer(train$Sex)-1
 train$Adjuvent_Radiotherapy <- as.integer(train$Adjuvent_Radiotherapy)-1
-```
 
-```{r}
 test$Relaps <- as.integer(test$Relaps ) -1
 test$Sex <- as.integer(test$Sex)-1
 test$Adjuvent_Radiotherapy <- as.integer(test$Adjuvent_Radiotherapy)-1
 ```
 
-## Plotting
+
+## Defining multiple logistic regression model
 
 ```{r}
-# logistic regression model
-y <- train$Relaps
-x1 <- train$Tumor_Size
-x2 <- train$OS
-x3 <- train$Lymphnode_resected
-x4 <- train$Sex
-x5 <- train$Age
-x6 <- train$Station_of_lymphnode_resected
-x7 <- train$num_nodes_with_tumor
-x8 <- train$Adjuvent_Radiotherapy
-x9 <- train$DFS
-n <- nrow(train)
-
-
-# code for the Bayesian model
-code <- nimbleCode({
-  
-  alpha ~ dnorm(0, sd = 1000)
-  beta1 ~ dnorm(0, sd = 1000)
-  beta2 ~ dnorm(0, sd = 1000)
-  beta3 ~ dnorm(0, sd = 1000)
-  beta4 ~ dnorm(0, sd = 1000)
-  beta5 ~ dnorm(0, sd = 1000)
-  beta6 ~ dnorm(0, sd = 1000)
-  beta7 ~ dnorm(0, sd = 1000)
-  beta8 ~ dnorm(0, sd = 1000)
-  beta9 ~ dnorm(0, sd = 1000)
-  
-  for (i in 1:n){
-    
-    eta[i] <- alpha + beta1 * x1[i] + beta2 * x2[i]+ beta3 * x3[i]+ beta4 * x4[i]+ beta5 * x5[i]+ beta6 * x6[i]+ beta7 * x7[i]+ beta8 * x8[i]+ beta9 * x9[i]
-    pi[i] <- exp(eta[i]) / (1 + exp(eta[i]))
-    y[i] ~ dbern(pi[i])
-    
-  }
-
-  
-})
-
-constants <- list(n = n, x1 = x1,x2 = x2,x3=x3,x4=x4,x5=x5,x6=x6,x7=x7,x8=x8,x9=x9)
-data <- list(y = y)
-initial <- list(alpha = mean(y), beta1 = 0, beta2 = 0, beta3 = 0, beta4 = 0, beta5=0, beta6=0, beta7=0, beta8=0, beta9=0)
-Rmodel <- nimbleModel(code, constants, data, initial)
-```
-
-
-```{r}
-conf <- configureMCMC(Rmodel)
-```
-
-
-```{r}
-Rmcmc <- buildMCMC(conf)
-Cmodel <- compileNimble(Rmodel)
-```
-
-
-```{r}
-Cmcmc <- compileNimble(Rmcmc, project = Rmodel)
-```
-
-
-```{r}
-set.seed(0)
-results <- runMCMC(Cmcmc, niter = 11000, nburnin = 1000, samples=TRUE, summary=TRUE)
-#head(results$samples)
-
-```
-
-
-```{r}
-## Plot Markov Chains:
-plotdata <- as_tibble(results$samples) %>% 
-  pivot_longer(cols=c("alpha","beta1","beta2","beta3","beta4","beta5","beta6","beta7","beta8","beta9"), names_to="Parameter", values_to="Values") %>%
-  add_column(Sequence = rep(1:nrow(results$samples),ncol(results$samples)))
-ggplot(data=plotdata, aes(x=Sequence, y=Values)) +
-  geom_line(col="lightblue") +
-  geom_point(col="blue", pch=16, size=0.2, alpha=0.5) +
-  facet_wrap(vars(Parameter), nrow=3, scale="free_y") +
-  labs(x = "MCMC Simulation Number",
-       y = "Samples of Parameters",
-       title = "Markov Chain Monte Carlo Samples")
-```
-
-
-```{r}
-## Plot Density Estimates:
-ggplot(data=plotdata, aes(x=Values, fill=Parameter)) +
-  geom_density(color="black") +
-  facet_wrap(vars(Parameter), nrow=2, scale="free") +
-  labs(title="Approximations of Posterior Distributions") +
-  theme(legend.position="none")
-```
-
-Comparing the coefficients between regular logistic regression and Bayesian
-```{r}
-results$summary
-```
-
-```{r}
-summary(glm.multiple_final)$coef
-```
-
-
-## Making predictions
-
-
-```{r}
-# logistic regression model
 y <- train$Relaps
 x1 <- train$Tumor_Size
 x2 <- train$OS
@@ -604,8 +494,6 @@ data <- list(y = y)
 initial <- list(alpha = mean(y), beta1 = 0, beta2 = 0, beta3 = 0, beta4 = 0, beta5=0, beta6=0, beta7=0, beta8=0, beta9=0)
 Rmodel <- nimbleModel(code, constants, data, initial)
 ```
-
-
 ```{r}
 conf <- configureMCMC(Rmodel)
 
@@ -613,29 +501,61 @@ conf <- configureMCMC(Rmodel)
 conf$addMonitors("y_test")
 conf$addMonitors("y_train")
 conf$getMonitors()
-```
 
-```{r}
 Rmcmc <- buildMCMC(conf)
 Cmodel <- compileNimble(Rmodel)
-```
-
-
-```{r}
 Cmcmc <- compileNimble(Rmcmc, project = Rmodel)
 ```
 
 
+
+## Running MCMC
+
 ```{r}
 set.seed(0)
 results <- runMCMC(Cmcmc, niter = 11000, nburnin = 1000, samples=TRUE, summary=TRUE)
-#head(results$samples)
 
 ```
 
 
+```{r}
+## Plot Markov Chains:
+plotdata <- as_tibble(results$samples) %>% 
+  pivot_longer(cols=c("alpha","beta1","beta2","beta3","beta4","beta5","beta6","beta7","beta8","beta9"), names_to="Parameter", values_to="Values") %>%
+  add_column(Sequence = rep(1:nrow(results$samples),10))
+ggplot(data=plotdata, aes(x=Sequence, y=Values)) +
+  geom_line(col="lightblue") +
+  geom_point(col="blue", pch=16, size=0.2, alpha=0.5) +
+  facet_wrap(vars(Parameter), nrow=3, scale="free_y") +
+  labs(x = "MCMC Simulation Number",
+       y = "Samples of Parameters",
+       title = "Markov Chain Monte Carlo Samples")
+```
 
-head(results$summary)
+
+```{r}
+## Plot Density Estimates:
+ggplot(data=plotdata, aes(x=Values, fill=Parameter)) +
+  geom_density(color="black") +
+  facet_wrap(vars(Parameter), nrow=2, scale="free") +
+  labs(title="Approximations of Posterior Distributions") +
+  theme(legend.position="none")
+```
+
+Comparing the coefficients between regular logistic regression and Bayesian
+
+```{r}
+summary(glm.multiple_final)$coef
+```
+
+
+```{r}
+results$summary[1:10, ]
+```
+
+The coefficients are different between the regular and Bayesian logistic models, but they are roughly similar.
+
+
 
 ## Making predictions with Bayesian approach
 
@@ -696,7 +616,7 @@ identical(test_pred,predicted.Relaps_test)
 
 
 
-The Bayesian approach has identical performance and predictions as regular logistic regression.
+The Bayesian approach has identical performance and predictions (at a threshold of 0.6) as regular logistic regression.
 
 
 
