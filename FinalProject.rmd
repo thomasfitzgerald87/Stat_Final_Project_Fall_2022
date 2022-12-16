@@ -6,8 +6,6 @@ output: html_document
 ---
 
 
-
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
@@ -16,26 +14,19 @@ library(readxl)
 library(nimble)
 ```
 
+Data can be found in the same directory as this report.  If it is unusable, it was originally downloaded from:
 
-Import from google sheets (Does not currently work)
-```{r}
-# url <- 'https://docs.google.com/spreadsheets/d/12s9EuWLAn4ci66V1wJ6fw4_1I4ESfaEx/edit?usp=share_link&ouid=105499402514720076437&rtpof=true&sd=true'
-# temp <- tempfile(fileext=".zip")
-# download.file(url,temp)
-# unzip(temp,tempdir()) #Fails to unzip
-# out
-# df<-read_excel(out)
 
-```
+https://journals.plos.org/plosone/article/file?type=supplementary&id=10.1371/journal.pone.0107276.s002
 
-Cheesy work-around.
+
 ```{r}
 df<-read_excel('./Table_S2.xls')
 head(df)
 ```
-First, we're going to fix the column names.
+First, we're going to fix the formatting and column names.  The column names have been read into the first row, with the table title as the first column name.
 
-*Replaced % with 'percent' in column 'tumor rate %'
+We're also going to rename a few of the columns for clarity, and to avoid syntax issues.
 ```{r}
 if(colnames(df[,2])=='...2'){
   colnames(df)<-gsub(" ","_",subset(df,df[,1]=='ID'))
@@ -47,40 +38,44 @@ df<-rename(df,c('tumor_rate_percent'='tumor_rate_%',
 
 head(df)
 ```
+Now that we have the data in a usable dataframe format, we're going to try and replicate the data preprocessing done in our primary study.  Our goal was to replicate their method as closely as reasonable.  All of the below quotes can be found in section 2.1 Study population and parameters.
+
 "A total of 194 records containing clinicopathological features related to the prognosis of NSCLC (Non-small cell lung cancer) patients were detailed in this dataset."
 
 Now, we can drop the column names & NA rows from the data, and we should end up with 194 valid entries.
 ```{r}
 df <- subset(df,is.na(ID)==FALSE&ID!='ID')
-head(df)
+print(paste("Number of rows:",nrow(df),sep=' '))
 ```
+That appears to match the paper.  Now that our dataset matches, we can start cleaning.
 
-(i) The patient records lack of smoking information (n = 24) was excluded during the model development. 
+"(i) The patient records lack of smoking information (n = 24) was excluded during the model development."
 
 I'm assuming this refers to the 'Smoking' column.  The check below shows 20 NA rows in the dataset, with all other entries containing apparently valid results (0,1).  I'm going to assume for the time being "n = 24" was a typo, or from an older version of the dataset.
 ```{r}
 print(paste('Total Smoking NAs: ',sum(is.na(df$Smoking)),sep=''))
+print('Contents of Smoking column after removing, ignoring NA values:')
 table(df$Smoking)
 df<-subset(df,is.na(Smoking)==FALSE)
 ```
 
-(ii) The patient status feature has also been omitted from our dataset as the vast proportion of the record lacks that component. 
+"(ii) The patient status feature has also been omitted from our dataset as the vast proportion of the record lacks that component. "
+
+I interpreted this as saying the 'Status' variable had a large proportion of NA values.
 ```{r}
 print(paste('Total status NAs: ',sum(is.na(df$status)),sep=''))
 print(paste('Proportion status NAs: ',round(sum(is.na(df$status))/nrow(df),3),sep=''))
 table(df$status)
 df <- select(df,-status)
 ```
-The NA count = 24 on this entry makes me concerned that there was a mix-up between the smoking and status categories, especially because status has a fairly low NA proportion (~.138).  Omitting status for now, may need to revise later.
+The NA count = 24 on this entry makes me concerned that there was a mix-up between the smoking and status categories, especially because status has a fairly low NA proportion (~.138).  I decided to omit status anyway, to fit with the study's preprocessing, but it may be worth checking out later.
 
-(iii) The missing values in other components of the datasets have been replaced by inclusion of the mean values of the respective columns. 
+"(iii) The missing values in other components of the datasets have been replaced by inclusion of the mean values of the respective columns."
 
 The entire dataset was imported as the 'chr' type, so we're going to need to fix the typing before we can replace anything with the column mean.  
 ```{r}
 str(df)
 ```
-All variables were imported as chr type, we're now going to attempt to fix that before replacing NULLs with column mean.
-
 ```{r}
 #T_col,N,and Staging left as character, commented lines can be pasted in to switch.
 
@@ -101,8 +96,9 @@ df <- df %>% mutate('ID' = as.numeric(ID),
 
 str(df)
 ```
-Now, let's see where we have NA's, to figure out where they might have applied this method.
+Quantiative variables (tumor_rate_percent,num_nodes,etc.) were converted to numeric, but boolean or categorical variables coded numerically (adjuvent_chemo,relaps) were left as character.  Please not that they are converted to factor later in the report.
 
+Now, let's see where we have NA's, to figure out where they might have applied this method:
 ```{r}
 for(j in 1:ncol(df)){
   if(sum(is.na(df[,j]))>0){
@@ -111,16 +107,17 @@ for(j in 1:ncol(df)){
 }
 ```
 The "EGFR_E..." series is categorical, as are "HER2","BRAF", and "ALK".  
-"Adjuvent_Radiotherapy" contains only 0's and 1's, indicating two categories or a boolean.   
+"Adjuvent_Radiotherapy" contains only 0's and 1's, indicating two categories or a boolean.
 
-This leaves num_nodes_with_tumor,Staging,Station_of_lymphode_resected, and OS as the only valid options for a mean replacement. 
+This leaves num_nodes_with_tumor,Staging,Station_of_lymphode_resected, and OS as the only valid options for a mean replacement.
 ```{r}
 df$num_nodes_with_tumor[is.na(df$num_nodes_with_tumor)] <- round(mean(df$num_nodes_with_tumor,na.rm=TRUE))
 df$Staging[is.na(df$Staging)] <- round(mean(df$Staging,na.rm=TRUE))
 df$Station_of_lymphnode_resected[is.na(df$`Station_of_lymphnode_resected`)] <- round(mean(df$`Station_of_lymphnode_resected`,na.rm=TRUE))
 df$OS[which(df$Last_followup == '#NULL!')] <- round(mean(df$OS,na.rm=TRUE))
 ```
-(iv) The characters used to define a particular category of function have been assigned in terms of numerical values (eg. Male = 1; Female = 0).
+
+"(iv) The characters used to define a particular category of function have been assigned in terms of numerical values (eg. Male = 1; Female = 0)."
 
 I'm unclear which columns this was applied to (besides Sex, based on the example).  I am going to adjust sex to match their values, but I will be leaving the other categorical variables, on the assumption that, in the study, they were redefined as numerical for easier input into their ML model.
 ```{r}
@@ -132,7 +129,7 @@ Now, we can fix some of the other major issues in the dataset.
 ```{r}
 table(df$Adjuvent_Chemo)
 ```
-This may be a bit of a leap, but Adjuvant Therapy is additional therapy given in addition to a primary therapy.  I'm guessing that 0=No, 1=Yes, and the other codes are specific types of Adjuvant therapy.  On that assumption, I'm going to refactor the other categories as 1.
+This may be a bit of a leap, but Adjuvant Therapy is additional therapy given in addition to a primary therapy.  I'm guessing that 0=No, 1=Yes, and the other codes are specific types of Adjuvant therapy.  On that assumption, I'm going to collapse the other categories into 1, making this a boolean.
 
 ```{r}
 df$Adjuvent_Chemo[df$Adjuvent_Chemo!=0]<-1
@@ -150,8 +147,11 @@ df$HER2[is.na(df$HER2)] <- 'UNK'
 df$BRAF[is.na(df$BRAF)] <- 'UNK'
 df$ALK[is.na(df$ALK)] <- 'UNK'
 ```
-Ope(n)_time and Last_followup come in two incompatible formats, so we're going to fix that part.  Most of it is in Excel's 1900 date format, and the rest appears to be in yyyymmdd format.  This block converts it to R's date format, but has some issues.  I recommend option 2: Just drop them.
-Option 1: Attempt to fix formatting.
+Ope(n)_time and Last_followup come in two incompatible formats, so we're going to fix that part.  Most of it is in Excel's 1900 date format, and the rest appears to be in yyyymmdd format.  This block converts it to R's date format, but has some issues.
+
+However, the OS column contains the most relevent information (length of treatment in months.)  In light of that, I would recommend removing the two date variables.  If time is needed later, the first code block will standardize them, but it makes the formatting of summary functions borderline unreadable.
+
+Option 1: Attempt to fix formatting. (Not recommended.)
 ```{r}
 # library(lubridate)
 # 
@@ -171,7 +171,7 @@ Option 1: Attempt to fix formatting.
 #   df$Ope_time[[which(df$Last_followup == '#NULL!')]] %m+% months(round(mean(df$OS,na.rm=TRUE)))
 # df$Last_followup <- lapply(df$Last_followup,date_fix)
 ```
-Option 2: Just get rid of them.
+Option 2: Just get rid of them. (Recommended.)
 ```{r}
 df<-select(df,-Ope_time,-Last_followup)
 ```
@@ -181,6 +181,7 @@ df<-as.data.frame(df)
 summary(df)
 ```
 
+Dataset notes from cleaning:
 Variable Notes:
 ID                        Patient ID number
 tumor_rate_percent        
@@ -214,22 +215,8 @@ I tried to follow the steps from Part 2.1 in the paper, but there are some error
   1. There are 20 NAs in the Smoking column, not 24.
   2. The status column only has 24 NAs, not "A vast proportion of the record".  I still dropped it to match their pre-processing.
   3. I left categorical/boolean variables (Sex,Smoking,etc.) as character.  Study may have refactored them as numeric, but for our purposes I think we can skip that step.
-  
-*Still to-do on cleaning:
-  Fix import block
-  Fix dates (if relevent)
-  Editing
-
-
-
-
 
 ## Beginning of Logistic Regression section
-
-
-
-
-
 
 ### Data Preprocessing
 
