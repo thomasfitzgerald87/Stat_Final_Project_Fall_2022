@@ -21,7 +21,7 @@ https://journals.plos.org/plosone/article/file?type=supplementary&id=10.1371/jou
 
 
 ```{r}
-df<-read_excel('./Table_S2.xls')
+df<-read_excel('Table_S2.xls')
 head(df)
 ```
 First, we're going to fix the formatting and column names.  The column names have been read into the first row, with the table title as the first column name.
