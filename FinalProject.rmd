@@ -305,9 +305,6 @@ summary(glm.multiple)
 There are some predictors that look to be significant: Sex, Age, T_of_tumor, Station_of_lymphnode_resected, Metastasis_Lymphnode, Adjuvent_Radiotherapy1 and DFS
 
 
-# ---> VIF to remove colinearity
-NOTE: we get the error "there are aliased coefficients in the model" which may be related to multicollinearity.
-
 
 ## Variable selection via AIC
 ```{r}
