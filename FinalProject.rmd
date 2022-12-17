@@ -4,7 +4,7 @@ author: "Marina, Paul, Thomas"
 date: "2022-12-06"
 output: html_document
 ---
-
+# 1. Data Cleaning
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -216,9 +216,6 @@ I tried to follow the steps from Part 2.1 in the paper, but there are some error
   2. The status column only has 24 NAs, not "A vast proportion of the record".  I still dropped it to match their pre-processing.
   3. I left categorical/boolean variables (Sex,Smoking,etc.) as character.  Study may have refactored them as numeric, but for our purposes I think we can skip that step.
 
-## Beginning of Logistic Regression section
-
-### Data Preprocessing
 
 
 ```{r}
@@ -260,6 +257,7 @@ Drop also column ID
 df <- subset(df, select = -c(hTERT, ID))
 ```
 
+# 2. Logistic Regression
 
 ## Train-Test Split
 ```{r}
@@ -272,7 +270,7 @@ train  <- df[sample, ]
 test   <- df[!sample, ]
 ```
 
-# Logistic regression 
+## Initial Logistic regression 
 Fit an initial logistic regression with all of the predictors 
 ```{r}
 glm.multiple <- glm(Relaps ~ .,
@@ -281,7 +279,7 @@ glm.multiple <- glm(Relaps ~ .,
 
 summary(glm.multiple)
 ```
-We are gettin the Warning "glm.fit: fitted probabilities numerically 0 or 1 occurred". This might be happening due to extreme outliers or influential observations.
+We are geting the Warning "glm.fit: fitted probabilities numerically 0 or 1 occurred". This might be happening due to extreme outliers or influential observations.
 
 This brute force model does not look great so let's deal with outliers and start applying some model selection
 
@@ -310,11 +308,8 @@ There are some predictors that look to be significant: Sex, Age, T_of_tumor, Sta
 # ---> VIF to remove colinearity
 NOTE: we get the error "there are aliased coefficients in the model" which may be related to multicollinearity.
 
-```{r}
 
-```
-
-# Variable selection via AIC
+## Variable selection via AIC
 ```{r}
 step(glm.multiple)
 ```
@@ -339,7 +334,7 @@ summary(glm.multiple_final)
 
 
 
-# Test model significance using likelihood ratio test
+## Test model significance using likelihood ratio test
 ```{r}
 #significance of full model/subset of predictors
 
@@ -405,7 +400,7 @@ Our model might be a little bit overfitted since it is achieving an accuracy of 
 
 
 
-# Start of Bayesian approach
+# 3. Bayesian Inference
 
 ```{r}
 #Data must be numeric in nimble code
